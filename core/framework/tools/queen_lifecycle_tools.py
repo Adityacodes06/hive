@@ -55,7 +55,6 @@ from framework.tools.flowchart_utils import (
 )
 
 if TYPE_CHECKING:
-    from framework.loader.tool_registry import ToolRegistry
     from framework.host.colony_runtime import ColonyRuntime
     from framework.host.event_bus import EventBus
     from framework.loader.tool_registry import ToolRegistry
