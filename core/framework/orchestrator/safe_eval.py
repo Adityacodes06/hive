@@ -15,6 +15,9 @@ MAX_POWER_RESULT_BITS = 4_096
 # On Windows (where SIGALRM is unavailable) the fallback relies on periodic
 # perf_counter polling which is less precise, so we use a wider margin.
 DEFAULT_TIMEOUT_MS = 100 if hasattr(signal, "SIGALRM") else 500
+MAX_RECURSION_DEPTH = 100
+MAX_COLLECTION_SIZE = 100_000
+
 
 
 def _safe_pow(base: Any, exp: Any) -> Any:
@@ -30,6 +33,19 @@ def _safe_pow(base: Any, exp: Any) -> Any:
                 raise ValueError("Power operation exceeds safe size limit")
 
     return operator.pow(base, exp)
+
+
+def _safe_mul(left: Any, right: Any) -> Any:
+    # Prevent memory exhaustion via large collection creation
+    if isinstance(left, (list, str, tuple, bytes)):
+        if isinstance(right, int) and right > 0:
+            if len(left) * right > MAX_COLLECTION_SIZE:
+                raise ValueError(f"Resulting collection size exceeds limit ({MAX_COLLECTION_SIZE})")
+    elif isinstance(right, (list, str, tuple, bytes)):
+        if isinstance(left, int) and left > 0:
+            if len(right) * left > MAX_COLLECTION_SIZE:
+                raise ValueError(f"Resulting collection size exceeds limit ({MAX_COLLECTION_SIZE})")
+    return operator.mul(left, right)
 
 
 def _timeout_message(timeout_ms: int) -> str:
@@ -85,7 +101,7 @@ def _execution_timeout(timeout_ms: int | None):
 SAFE_OPERATORS = {
     ast.Add: operator.add,
     ast.Sub: operator.sub,
-    ast.Mult: operator.mul,
+    ast.Mult: _safe_mul,
     ast.Div: operator.truediv,
     ast.FloorDiv: operator.floordiv,
     ast.Mod: operator.mod,
@@ -143,13 +159,21 @@ class SafeEvalVisitor(ast.NodeVisitor):
         self.context = context
         self.deadline = deadline
         self.timeout_ms = timeout_ms
+        self.depth = 0
 
     def visit(self, node: ast.AST) -> Any:
         _check_timeout(self.deadline, self.timeout_ms)
-        # Override visit to prevent default behavior and ensure only explicitly allowed nodes work
-        method = "visit_" + node.__class__.__name__
-        visitor = getattr(self, method, self.generic_visit)
-        return visitor(node)
+        self.depth += 1
+        if self.depth > MAX_RECURSION_DEPTH:
+            raise ValueError(f"Recursion depth limit exceeded ({MAX_RECURSION_DEPTH})")
+
+        try:
+            # Override visit to prevent default behavior and ensure only explicitly allowed nodes work
+            method = "visit_" + node.__class__.__name__
+            visitor = getattr(self, method, self.generic_visit)
+            return visitor(node)
+        finally:
+            self.depth -= 1
 
     def generic_visit(self, node: ast.AST):
         raise ValueError(f"Use of {node.__class__.__name__} is not allowed")
@@ -259,12 +283,12 @@ class SafeEvalVisitor(ast.NodeVisitor):
         try:
             return getattr(val, node.attr)
         except AttributeError:
-            # Fallback: maybe it's a dict and they want dot access?
-            # (Only if we want to support that sugar, usually not standard python)
-            # Let's stick to standard python behavior + strict private check.
-            pass
-
-        raise AttributeError(f"Object has no attribute '{node.attr}'")
+            # Quality of Life (QoL) Enhancement:
+            # Support dot-access for dictionaries, which is common in agentic workflows.
+            # E.g. allow `state.user_id` as sugar for `state["user_id"]`.
+            if isinstance(val, dict) and node.attr in val:
+                return val[node.attr]
+            raise AttributeError(f"Object has no attribute/key '{node.attr}'")
 
     def visit_Call(self, node: ast.Call) -> Any:
         _check_timeout(self.deadline, self.timeout_ms)

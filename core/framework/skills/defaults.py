@@ -70,6 +70,7 @@ SKILL_REGISTRY: dict[str, str] = {
     "hive.error-recovery": "error-recovery",
     "hive.colony-progress-tracker": "colony-progress-tracker",
     "hive.writing-hive-skills": "writing-hive-skills",
+    "hive.pull-request-architect": "pull-request-architect",
 }
 
 # Shared buffer keys referenced by the remaining default skills (used
